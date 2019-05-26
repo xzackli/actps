@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from soapack import interfaces
 from pixell import enmap
 from pixell import enplot
-import pymaster as nmt
 
 def eshow(x,**kwargs): enplot.show(enplot.plot(x, downgrade=4,**kwargs))
 
@@ -21,8 +20,6 @@ def get_planck_coadd(freq, dmp):
 
 
 # Here is where we do a crappy job of estimating power spectra.
-lmax = 8000
-beam_ells = np.arange(lmax+1)
 
 def bin(data,modlmap,bin_edges):
     digitized = np.digitize(np.ndarray.flatten(modlmap), bin_edges,right=True)
@@ -39,7 +36,7 @@ def compute_ps(map1, map2, mask, beamf1, beamf2):
     centers = (bin_edges[1:] + bin_edges[:-1])/2.
     w2 = np.mean(mask**2.)
     modlmap = enmap.modlmap(map1.shape,map1.wcs)
-    binned_power = bin(power/w2/beamf1(modlmap),beamf2(modlmap),modlmap,bin_edges)
+    binned_power = bin(power/w2/beamf1(modlmap)/beamf2(modlmap),modlmap,bin_edges)
     return centers, binned_power
 
 
@@ -55,20 +52,20 @@ for patch in ['deep56', 'boss']:
     dmp = interfaces.PlanckHybrid(region=mask)
     # we loop over all pairs of Planck x ACT
     for planckfreq in ['030','044','070','100','143','217','353','545']: # no '857'
-        planckbeam = dmp.get_beam(beam_ells, planckfreq)
+        planckbeam = lambda x: dmp.get_beam(x, planckfreq)
         planckmap = get_planck_coadd(planckfreq, dmp)[0,:,:]
 
         for actseason in ['s14','s15']:
             for array in ['pa1_f150', 'pa2_f150', 'pa3_f090', 'pa3_f150']:
                 try:
-                    actbeam = dma.get_beam(beam_ells, actseason, 
+                    actbeam = lambda x: dma.get_beam(x, actseason, 
                                            patch, array)
                     actmap = dma.get_coadd(actseason, 
                                            patch, array, ncomp=1, 
                                            srcfree=True)[0,:,:] # just want T
                     lb, Cb = compute_ps(planckmap, actmap, mask, planckbeam, actbeam)
                     ACT_planck[(patch, planckfreq, actseason, array)] = (lb, Cb)
-                except OSError:
+                except (OSError,KeyError):
                     print("Can't find this ACT map:", actseason, array)
 
 
@@ -84,36 +81,36 @@ with open('for_mat/ACT_planck.pickle', 'wb') as handle:
 
 planck_planck = {}
 
-for planckfreq0 in ['030','044','070','100','143','217','353','545']:
+for patch in ['deep56', 'boss']:
     mask = interfaces.get_act_mr3_crosslinked_mask(patch)
     dmp = interfaces.PlanckHybrid(region=mask)
-    # we loop over all pairs of Planck x Planck
-    planckbeam0 = dmp.get_beam(beam_ells, planckfreq0)
-    planckmap0 = get_planck_coadd(planckfreq0, dmp)[0,:,:]
-    for planckfreq1 in ['030','044','070','100','143','217','353','545']:
-        if float(planckfreq0) < float(planckfreq1):
-            planckbeam1 = dmp.get_beam(beam_ells, planckfreq1)
-            planckmap1 = get_planck_coadd(planckfreq1, dmp)[0,:,:]
-            lb, Cb = compute_ps(planckmap0, planckmap1, mask, planckbeam0, planckbeam1)
-            planck_planck[planckfreq0, planckfreq1] = (lb, Cb)
+    for planckfreq0 in ['030','044','070','100','143','217','353','545']:
+        # we loop over all pairs of Planck x Planck
+        planckbeam0 = lambda x: dmp.get_beam(x, planckfreq0)
+        planckmap0 = get_planck_coadd(planckfreq0, dmp)[0,:,:]
+        for planckfreq1 in ['030','044','070','100','143','217','353','545']:
+            if float(planckfreq0) < float(planckfreq1):
+                planckbeam1 = lambda x: dmp.get_beam(x, planckfreq1)
+                planckmap1 = get_planck_coadd(planckfreq1, dmp)[0,:,:]
+                lb, Cb = compute_ps(planckmap0, planckmap1, mask, planckbeam0, planckbeam1)
+                planck_planck[(patch,planckfreq0, planckfreq1)] = (lb, Cb)
 
 
 # # Planck x Planck (same freq)
 # These are spectra for which $f_0 = f_1$, so I use half missions.
 
-# In[36]:
 
-
-for planckfreq in ['030','044','070','100','143','217','353','545']:
+for patch in ['deep56', 'boss']:
     mask = interfaces.get_act_mr3_crosslinked_mask(patch)
     dmp = interfaces.PlanckHybrid(region=mask)
-    # we loop over all pairs of Planck x Planck
-    planckbeam = dmp.get_beam(beam_ells, planckfreq)
-    planckmap0 = dmp.get_split(planckfreq, splitnum=0, ncomp=1, srcfree=True)
-    planckmap1 = dmp.get_split(planckfreq, splitnum=1, ncomp=1, srcfree=True)
-    
-    lb, Cb = compute_ps(planckmap0, planckmap1, mask, planckbeam, planckbeam)
-    planck_planck[(planckfreq, planckfreq)] = (lb, Cb)
+    for planckfreq in ['030','044','070','100','143','217','353','545']:
+        # we loop over all pairs of Planck x Planck
+        planckbeam = lambda x: dmp.get_beam(x, planckfreq)
+        planckmap0 = dmp.get_split(planckfreq, splitnum=0, ncomp=1, srcfree=True)
+        planckmap1 = dmp.get_split(planckfreq, splitnum=1, ncomp=1, srcfree=True)
+
+        lb, Cb = compute_ps(planckmap0, planckmap1, mask, planckbeam, planckbeam)
+        planck_planck[(patch,planckfreq, planckfreq)] = (lb, Cb)
 
 
 # In[37]:
@@ -150,8 +147,8 @@ for patch in ['deep56', 'boss']:
                     
                     if (actseason0 != actseason1 ) or (array0 != array1):
                         try:
-                            actbeam0 = dma.get_beam(beam_ells, actseason0, patch, array0)
-                            actbeam1 = dma.get_beam(beam_ells, actseason1, patch, array1)
+                            actbeam0 = lambda x: dma.get_beam(x, actseason0, patch, array0)
+                            actbeam1 = lambda x: dma.get_beam(x, actseason1, patch, array1)
 
                             actmap0 = dma.get_coadd(actseason0, patch, array0, 
                                                     ncomp=1, srcfree=True)[0,:,:] # just want T
@@ -159,7 +156,7 @@ for patch in ['deep56', 'boss']:
                                                     ncomp=1, srcfree=True)[0,:,:] # just want T
                             lb, Cb = compute_ps(actmap0, actmap1, mask, actbeam0, actbeam1)
                             act_act[(patch, actseason0, array0, actseason1, array1)] = (lb, Cb)
-                        except OSError:
+                        except (OSError,KeyError):
                             print("Can't find this ACT map:", actseason0, array0, actseason1, array1)
 
 
@@ -184,7 +181,7 @@ for patch in ['deep56', 'boss']:
         for array0 in ['pa1_f150', 'pa2_f150', 'pa3_f090', 'pa3_f150']:
             
             try:
-                actbeam = dma.get_beam(beam_ells, actseason0, patch, array0)
+                actbeam = lambda x: dma.get_beam(x, actseason0, patch, array0)
                 actmaps = dma.get_splits(actseason0, patch, array0, 
                                             ncomp=1, srcfree=True)
                 Cb_list = []
@@ -198,7 +195,7 @@ for patch in ['deep56', 'boss']:
                 Cb_list = np.array(Cb_list)
                 act_act[(patch, actseason0, array0, actseason0, array0)] = (lb_list[0], 
                                                                             np.sum(Cb_list,axis=0)/Cb_list.shape[0])
-            except OSError:
+            except (OSError,KeyError):
                 print("Can't find this ACT map:", actseason0, array0, actseason1, array1)
 
 
